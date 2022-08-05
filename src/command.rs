@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
@@ -30,25 +30,6 @@ impl SourcemapNode {
     fn find_child(&self, name: String) -> Option<&SourcemapNode> {
         self.children.iter().find(|child| child.name == name)
     }
-}
-
-fn find_node_with_parent(
-    root: &SourcemapNode,
-    path: PathBuf,
-) -> (Option<&SourcemapNode>, Option<&SourcemapNode>) {
-    let mut stack = vec![(root, None)];
-
-    while let Some((node, parent)) = stack.pop() {
-        if node.file_paths.contains(&path.to_path_buf()) {
-            return (Some(node), parent);
-        }
-
-        for child in &node.children {
-            stack.push((child, Some(node)));
-        }
-    }
-
-    (None, None)
 }
 
 fn mutate_sourcemap(node: &mut SourcemapNode) {
@@ -191,6 +172,151 @@ pub struct Command {
     pub packages_folder: PathBuf,
 }
 
+fn find_node(root: &SourcemapNode, path: PathBuf) -> Option<Vec<&SourcemapNode>> {
+    let mut stack = vec![vec![root]];
+
+    while let Some(node_path) = stack.pop() {
+        let node = node_path.last().unwrap();
+        if node.file_paths.contains(&path.to_path_buf()) {
+            return Some(node_path);
+        }
+
+        for child in &node.children {
+            let mut path = node_path.clone();
+            path.push(child);
+            stack.push(path);
+        }
+    }
+
+    None
+}
+
+fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
+    println!("Mutating {}", path.display());
+
+    // The entry should be a thunk
+    let parsed_code = full_moon::parse(&std::fs::read_to_string(path)?)?;
+    assert!(parsed_code.nodes().last_stmt().is_some());
+
+    let mut new_stmts = Vec::new();
+    let mut type_declarations_created = false;
+
+    if let Some(LastStmt::Return(r#return)) = parsed_code.nodes().last_stmt() {
+        let returned_expression = r#return.returns().iter().next().unwrap();
+        let path_components =
+            match_require(returned_expression).expect("could not resolve path for require");
+
+        println!("Found require in format {}", path_components.join("/"));
+
+        let mut iter = path_components.iter();
+        let mut node_path =
+            find_node(root, path.canonicalize()?).expect("could not find node path");
+        assert!(iter.next().unwrap() == "script");
+
+        for component in iter {
+            if component == "Parent" {
+                node_path.pop();
+            } else {
+                node_path.push(
+                    node_path
+                        .last()
+                        .unwrap()
+                        .find_child(component.to_string())
+                        .expect("unable to find child"),
+                );
+            }
+        }
+
+        let current = node_path.last().unwrap();
+        let file_path = current.file_paths.get(0).expect("No file path for require");
+        println!(
+            "Required file is {} [{}], located at {}",
+            current.name,
+            current.class_name,
+            file_path.display()
+        );
+
+        new_stmts.push((
+            Stmt::LocalAssignment(
+                LocalAssignment::new(
+                    std::iter::once(Pair::End(TokenReference::new(
+                        vec![],
+                        Token::new(TokenType::Identifier {
+                            identifier: "REQUIRED_MODULE".into(),
+                        }),
+                        vec![],
+                    )))
+                    .collect(),
+                )
+                .with_equal_token(Some(TokenReference::symbol(" = ").unwrap()))
+                .with_expressions(r#return.returns().clone()),
+            ),
+            None,
+        ));
+
+        let parsed_module = full_moon::parse(&std::fs::read_to_string(file_path)?)?;
+        for stmt in parsed_module.nodes().stmts() {
+            if let Stmt::ExportedTypeDeclaration(stmt) = stmt {
+                type_declarations_created = true;
+                new_stmts.push((
+                    Stmt::ExportedTypeDeclaration(create_new_type_declaration(stmt)),
+                    Some(TokenReference::new(
+                        vec![],
+                        Token::new(TokenType::Whitespace {
+                            characters: "\n".into(),
+                        }),
+                        vec![],
+                    )),
+                ))
+            }
+        }
+    }
+
+    // Only commit to writing a new file if we created new type declarations
+    if type_declarations_created {
+        let new_nodes = parsed_code
+            .nodes()
+            .clone()
+            .with_stmts(new_stmts)
+            .with_last_stmt(Some((
+                LastStmt::Return(
+                    Return::new().with_returns(
+                        std::iter::once(Pair::End(Expression::Value {
+                            value: Box::new(Value::Symbol(TokenReference::new(
+                                vec![],
+                                Token::new(TokenType::Identifier {
+                                    identifier: "REQUIRED_MODULE".into(),
+                                }),
+                                vec![Token::new(TokenType::Whitespace {
+                                    characters: "\n".into(),
+                                })],
+                            ))),
+                            type_assertion: None,
+                        }))
+                        .collect(),
+                    ),
+                ),
+                None,
+            )));
+        let new_ast = parsed_code.with_nodes(new_nodes);
+
+        std::fs::write(path, full_moon::print(&new_ast))?;
+    }
+    Ok(())
+}
+
+fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<()> {
+    for package_entry in std::fs::read_dir(path)?.flatten() {
+        for thunk in std::fs::read_dir(package_entry.path())?.flatten() {
+            if thunk.file_type().unwrap().is_file() {
+                mutate_thunk(&thunk.path(), root)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl Command {
     pub fn run(&self) -> Result<()> {
         let sourcemap_contents = std::fs::read_to_string(&self.sourcemap)?;
@@ -202,117 +328,13 @@ impl Command {
 
         for entry in std::fs::read_dir(&self.packages_folder)?.flatten() {
             if entry.file_name() == "_Index" {
+                handle_index_directory(&entry.path(), &sourcemap)?;
                 continue;
             }
 
-            println!("Mutating {}", entry.path().display());
-
-            // The entry should be a thunk
-            let parsed_code = full_moon::parse(&std::fs::read_to_string(entry.path())?)?;
-            assert!(parsed_code.nodes().last_stmt().is_some());
-
-            let mut new_stmts = Vec::new();
-            let mut type_declarations_created = false;
-
-            if let Some(LastStmt::Return(r#return)) = parsed_code.nodes().last_stmt() {
-                let returned_expression = r#return.returns().iter().next().unwrap();
-                let path_components =
-                    match_require(returned_expression).expect("could not resolve path for require");
-
-                println!("Found require in format {}", path_components.join("/"));
-
-                let mut iter = path_components.iter();
-
-                // HACK: we rely on the first two components to be "script.Parent", so that we can start at the "Packages" folder
-                assert!(iter.next().unwrap() == "script");
-                assert!(iter.next().unwrap() == "Parent");
-
-                let mut current = find_node_with_parent(&sourcemap, entry.path().canonicalize()?)
-                    .1
-                    .expect("no parent found");
-
-                for component in iter {
-                    current = current
-                        .find_child(component.to_string())
-                        .expect("unable to find child");
-                }
-
-                let file_path = current.file_paths.get(0).expect("No file path for require");
-                println!(
-                    "Required file is {} [{}], located at {}",
-                    current.name,
-                    current.class_name,
-                    file_path.display()
-                );
-
-                new_stmts.push((
-                    Stmt::LocalAssignment(
-                        LocalAssignment::new(
-                            std::iter::once(Pair::End(TokenReference::new(
-                                vec![],
-                                Token::new(TokenType::Identifier {
-                                    identifier: "REQUIRED_MODULE".into(),
-                                }),
-                                vec![],
-                            )))
-                            .collect(),
-                        )
-                        .with_equal_token(Some(TokenReference::symbol(" = ").unwrap()))
-                        .with_expressions(r#return.returns().clone()),
-                    ),
-                    None,
-                ));
-
-                let parsed_module = full_moon::parse(&std::fs::read_to_string(file_path)?)?;
-                for stmt in parsed_module.nodes().stmts() {
-                    if let Stmt::ExportedTypeDeclaration(stmt) = stmt {
-                        type_declarations_created = true;
-                        new_stmts.push((
-                            Stmt::ExportedTypeDeclaration(create_new_type_declaration(stmt)),
-                            Some(TokenReference::new(
-                                vec![],
-                                Token::new(TokenType::Whitespace {
-                                    characters: "\n".into(),
-                                }),
-                                vec![],
-                            )),
-                        ))
-                    }
-                }
-            }
-
-            // Only commit to writing a new file if we created new type declarations
-            if type_declarations_created {
-                let new_nodes = parsed_code
-                    .nodes()
-                    .clone()
-                    .with_stmts(new_stmts)
-                    .with_last_stmt(Some((
-                        LastStmt::Return(
-                            Return::new().with_returns(
-                                std::iter::once(Pair::End(Expression::Value {
-                                    value: Box::new(Value::Symbol(TokenReference::new(
-                                        vec![],
-                                        Token::new(TokenType::Identifier {
-                                            identifier: "REQUIRED_MODULE".into(),
-                                        }),
-                                        vec![Token::new(TokenType::Whitespace {
-                                            characters: "\n".into(),
-                                        })],
-                                    ))),
-                                    type_assertion: None,
-                                }))
-                                .collect(),
-                            ),
-                        ),
-                        None,
-                    )));
-                let new_ast = parsed_code.with_nodes(new_nodes);
-
-                std::fs::write(entry.path(), full_moon::print(&new_ast))?;
-            }
+            mutate_thunk(&entry.path(), &sourcemap)?;
         }
-        
+
         Ok(())
     }
 }
