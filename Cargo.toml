@@ -5,6 +5,14 @@ license = "MIT"
 version = "1.0.0"
 edition = "2021"
 
+[lib]
+name = "wally_package_types"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wally-package-types"
+path = "src/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
