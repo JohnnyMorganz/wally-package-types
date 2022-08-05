@@ -129,9 +129,9 @@ fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTypeDe
                 .map(|pair| {
                     pair.clone().map(|decl| match decl.parameter() {
                         GenericParameterInfo::Name(token) => TypeInfo::Basic(token.clone()),
-                        GenericParameterInfo::Variadic { name, ellipse } => TypeInfo::Variadic {
+                        GenericParameterInfo::Variadic { name, ellipse } => TypeInfo::GenericPack {
+                            name: name.clone(),
                             ellipse: ellipse.clone(),
-                            type_info: Box::new(TypeInfo::Basic(name.clone())),
                         },
                         _ => unreachable!(),
                     })
