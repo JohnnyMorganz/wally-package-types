@@ -209,13 +209,18 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
         println!("Found require in format {}", path_components.join("/"));
 
         let mut iter = path_components.iter();
-        let mut node_path =
-            find_node(root, path.canonicalize()?).expect("could not find node path");
-        assert!(iter.next().unwrap() == "script");
+        let first_in_chain = iter.next().expect("No path components");
+        assert!(first_in_chain == "script" || first_in_chain == "game");
+
+        let mut node_path = if first_in_chain == "script" {
+            find_node(root, path.canonicalize()?).expect("could not find node path")
+        } else {
+            vec![root]
+        };
 
         for component in iter {
             if component == "Parent" {
-                node_path.pop();
+                node_path.pop().expect("No parent available");
             } else {
                 node_path.push(
                     node_path
