@@ -141,21 +141,32 @@ fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTypeDe
         None => IndexedTypeInfo::Basic(stmt.type_declaration().type_name().clone()),
     };
 
-    // Can't use TypeDeclaration::new(), since it always panics
-    let type_declaration = stmt
-        .type_declaration()
-        .clone()
-        .with_type_definition(TypeInfo::Module {
-            module: TokenReference::new(
-                vec![],
-                Token::new(TokenType::Identifier {
-                    identifier: "REQUIRED_MODULE".into(),
-                }),
-                vec![],
+    // Modify the original type declaration to remove the default generics
+    let original_type_declaration = match stmt.type_declaration().generics() {
+        Some(generics) => stmt.type_declaration().clone().with_generics(Some(
+            generics.clone().with_generics(
+                generics
+                    .generics()
+                    .pairs()
+                    .map(|pair| pair.clone().map(|decl| decl.with_default(None)))
+                    .collect::<Punctuated<_>>(),
             ),
-            punctuation: TokenReference::symbol(".").unwrap(),
-            type_info: Box::new(type_info),
-        });
+        )),
+        None => stmt.type_declaration().clone(),
+    };
+
+    // Can't use TypeDeclaration::new(), since it always panics
+    let type_declaration = original_type_declaration.with_type_definition(TypeInfo::Module {
+        module: TokenReference::new(
+            vec![],
+            Token::new(TokenType::Identifier {
+                identifier: "REQUIRED_MODULE".into(),
+            }),
+            vec![],
+        ),
+        punctuation: TokenReference::symbol(".").unwrap(),
+        type_info: Box::new(type_info),
+    });
 
     ExportedTypeDeclaration::new(type_declaration)
 }
