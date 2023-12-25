@@ -1,8 +1,13 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::bail;
+use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use full_moon::ast::LastStmt;
+use log::error;
+use log::info;
+use log::warn;
 
 use crate::link_mutator::*;
 use crate::require_parser::*;
@@ -53,25 +58,36 @@ fn file_path_from_components(
     path_components: Vec<String>,
 ) -> Result<PathBuf> {
     let mut iter = path_components.iter();
-    let first_in_chain = iter.next().expect("No path components");
+    let first_in_chain = iter.next().context("No path components")?;
     assert!(first_in_chain == "script" || first_in_chain == "game");
 
     let mut node_path = if first_in_chain == "script" {
-        find_node(root, path.canonicalize()?).expect("could not find node path")
+        find_node(root, path.canonicalize()?).context("Linker node not found in sourcemap")?
     } else {
         vec![root]
     };
 
     for component in iter {
         if component == "Parent" {
-            node_path.pop().expect("No parent available");
+            node_path
+                .pop()
+                .context("No parent found in linked components")?;
         } else {
             node_path.push(
                 node_path
                     .last()
                     .unwrap()
                     .find_child(component.to_string())
-                    .expect("unable to find child"),
+                    .with_context(|| {
+                        format!(
+                            "Child '{component}' not found in '{}'",
+                            node_path
+                                .iter()
+                                .map(|node| node.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join("/")
+                        )
+                    })?,
             );
         }
     }
@@ -81,10 +97,10 @@ fn file_path_from_components(
         .file_paths
         .iter()
         .find(lua_files_filter)
-        .expect("No file path for require")
+        .context("No .lua/.luau file found for linked node")?
         .clone();
-    println!(
-        "Required file is {} [{}], located at {}",
+    info!(
+        "Link require points to {} [{}] @ '{}'",
         current.name,
         current.class_name,
         file_path.display()
@@ -93,64 +109,109 @@ fn file_path_from_components(
     Ok(file_path)
 }
 
-fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
-    println!("Mutating {}", path.display());
+enum MutateResult {
+    Successful,
+    FailedToParseReturnStmt,
+}
+
+fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<MutateResult> {
+    info!("Found link file '{}'", path.display());
 
     // The entry should be a thunk
     let parsed_code = full_moon::parse(&std::fs::read_to_string(path)?)?;
-    assert!(parsed_code.nodes().last_stmt().is_some());
 
     if let Some(LastStmt::Return(r#return)) = parsed_code.nodes().last_stmt() {
         let returned_expression = r#return.returns().iter().next().unwrap();
-        let path_components =
-            match_require(returned_expression).expect("could not resolve path for require");
 
-        println!("Found require in format {}", path_components.join("/"));
+        let path_components = match match_require(returned_expression) {
+            Ok(components) => components,
+            Err(err) => {
+                warn!("Malformed link file, could not parse return expression, skipping. Run `wally install` to regenerate link files");
+                error!("{:#}", err);
+                return Ok(MutateResult::FailedToParseReturnStmt);
+            }
+        };
 
-        let file_path = file_path_from_components(path, root, path_components)?;
-        let pass_through_contents = std::fs::read_to_string(file_path)?;
+        info!("Path converted to: '{}'", path_components.join("/"));
+
+        let file_path = file_path_from_components(path, root, path_components)
+            .context("Could not convert require expression to file path")?;
+        let pass_through_contents =
+            std::fs::read_to_string(file_path).context("Failed to read linked file")?;
         let returns = r#return.returns().clone();
-        let new_link_contents = mutate_link(parsed_code, returns, &pass_through_contents)?;
+        let new_link_contents = mutate_link(parsed_code, returns, &pass_through_contents)
+            .context("Failed to create new link contents")?;
 
         match new_link_contents {
             MutateLinkResult::Changed(new_ast) => std::fs::write(path, full_moon::print(&new_ast))?,
             MutateLinkResult::Unchanged => (),
         };
+    } else {
+        warn!("Malformed link file, no return statement found, skipping. Run `wally install` to regenerate link files");
+        return Ok(MutateResult::FailedToParseReturnStmt);
     }
 
-    Ok(())
+    Ok(MutateResult::Successful)
 }
 
-fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<()> {
+// Mutate thunk with error handled, to allow continuing
+fn handled_mutate_thunk(path: &Path, root: &SourcemapNode) -> bool {
+    match mutate_thunk(path, root) {
+        Ok(result) => matches!(result, MutateResult::Successful),
+        Err(err) => {
+            error!("{:#}", err);
+            false
+        }
+    }
+}
+
+fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<bool> {
+    let mut success = true;
     for package_entry in std::fs::read_dir(path)?.flatten() {
         for thunk in std::fs::read_dir(package_entry.path())?.flatten() {
             if thunk.file_type().unwrap().is_file() {
-                mutate_thunk(&thunk.path(), root)?;
+                success &= handled_mutate_thunk(&thunk.path(), root);
             }
         }
     }
 
-    Ok(())
+    Ok(success)
 }
 
 impl Command {
     pub fn run(&self) -> Result<()> {
-        let sourcemap_contents = std::fs::read_to_string(&self.sourcemap)?;
-        let mut sourcemap: SourcemapNode = serde_json::from_str(&sourcemap_contents)?;
+        let sourcemap_contents =
+            std::fs::read_to_string(&self.sourcemap).context("Failed to read sourcemap file")?;
+        let mut sourcemap: SourcemapNode =
+            serde_json::from_str(&sourcemap_contents).context("Failed to parse sourcemap file")?;
 
         // Mutate the sourcemap so that all file paths are canonicalized for simplicity
         // And that they contain pointers to their parent
-        mutate_sourcemap(&mut sourcemap);
+        mutate_sourcemap(&mut sourcemap)?;
 
-        for entry in std::fs::read_dir(&self.packages_folder)?.flatten() {
+        let mut success = true;
+        for entry in std::fs::read_dir(&self.packages_folder)
+            .context("Failed to read packages folder")?
+            .flatten()
+        {
             if entry.file_name() == "_Index" {
-                handle_index_directory(&entry.path(), &sourcemap)?;
+                match handle_index_directory(&entry.path(), &sourcemap) {
+                    Ok(index_success) => success &= index_success,
+                    Err(err) => {
+                        error!("{:#}", err);
+                        success = false;
+                    }
+                }
                 continue;
             }
 
-            mutate_thunk(&entry.path(), &sourcemap)?;
+            success &= handled_mutate_thunk(&entry.path(), &sourcemap)
         }
 
-        Ok(())
+        if success {
+            Ok(())
+        } else {
+            bail!("Mutation did not complete successfully");
+        }
     }
 }

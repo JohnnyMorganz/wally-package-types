@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -19,17 +20,19 @@ impl SourcemapNode {
 }
 
 /// Updates all file paths in the sourcemap into canonical form, to allow matching later
-pub fn mutate_sourcemap(node: &mut SourcemapNode) {
+pub fn mutate_sourcemap(node: &mut SourcemapNode) -> Result<()> {
     node.file_paths = node
         .file_paths
         .iter()
         .map(|path| {
             path.canonicalize()
-                .unwrap_or_else(|_| panic!("failed to canonicalize {}", path.display()))
+                .context(format!("Failed to canonicalize '{}'", path.display()))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     for child in &mut node.children {
-        mutate_sourcemap(child);
+        mutate_sourcemap(child)?;
     }
+
+    Ok(())
 }

@@ -39,9 +39,9 @@ pub fn expression_to_components(expression: &Expression) -> Result<Vec<String>> 
     Ok(components)
 }
 
-pub fn match_require(expression: &Expression) -> Option<Vec<String>> {
+pub fn match_require(expression: &Expression) -> Result<Vec<String>> {
     let Expression::FunctionCall(call) = expression else {
-        return None;
+        bail!("not a function call");
     };
 
     if call.prefix().to_string().trim() == "require" && call.suffixes().count() == 1 {
@@ -49,14 +49,14 @@ pub fn match_require(expression: &Expression) -> Option<Vec<String>> {
             call.suffixes().next().unwrap()
         {
             if arguments.len() == 1 {
-                return expression_to_components(arguments.iter().next().unwrap()).ok();
+                return expression_to_components(arguments.iter().next().unwrap());
             }
         }
     } else {
-        panic!("unknown require expression");
+        bail!("unknown require expression");
     }
 
-    None
+    bail!("not a require function call")
 }
 
 #[cfg(test)]
@@ -74,31 +74,32 @@ mod tests {
         Expression::FunctionCall(expression.clone())
     }
 
-    fn components(components: Vec<&str>) -> Option<Vec<String>> {
-        Some(components.iter().map(|x| x.to_string()).collect())
+    fn components(components: Vec<&str>) -> Result<Vec<String>> {
+        Ok(components.iter().map(|x| x.to_string()).collect())
+    }
+
+    fn expression_into_components(code: &str, components: Vec<&str>) -> bool {
+        match_require(&require_expression(code)).unwrap() == components
     }
 
     #[test]
     fn simple_require() {
-        assert_eq!(
-            match_require(&require_expression("require(script.Parent.Example)")),
-            components(vec!["script", "Parent", "Example"])
-        )
+        assert!(expression_into_components(
+            "require(script.Parent.Example)",
+            vec!["script", "Parent", "Example"]
+        ))
     }
 
     #[test]
     fn require_with_brackets() {
-        assert_eq!(
-            match_require(&require_expression("require(script.Parent['Example'])")),
-            components(vec!["script", "Parent", "Example"])
-        )
+        assert!(expression_into_components(
+            "require(script.Parent['Example'])",
+            vec!["script", "Parent", "Example"]
+        ))
     }
 
     #[test]
     fn unhandled_require() {
-        assert_eq!(
-            match_require(&require_expression("require('string')")),
-            None
-        )
+        assert!(match_require(&require_expression("require('string')")).is_err())
     }
 }
