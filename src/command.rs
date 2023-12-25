@@ -39,6 +39,13 @@ fn find_node(root: &SourcemapNode, path: PathBuf) -> Option<Vec<&SourcemapNode>>
     None
 }
 
+fn lua_files_filter(path: &&PathBuf) -> bool {
+    match path.extension() {
+        Some(extension) => extension == "lua" || extension == "luau",
+        None => false,
+    }
+}
+
 /// Given a list of components (e.g., ['script', 'Parent', 'Example']), converts it to a file path
 fn file_path_from_components(
     path: &Path,
@@ -72,7 +79,8 @@ fn file_path_from_components(
     let current = node_path.last().unwrap();
     let file_path = current
         .file_paths
-        .get(0)
+        .iter()
+        .find(lua_files_filter)
         .expect("No file path for require")
         .clone();
     println!(
