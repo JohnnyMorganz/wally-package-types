@@ -41,7 +41,7 @@ pub fn expression_to_components(expression: &Expression) -> Result<Vec<String>> 
 
 pub fn match_require(expression: &Expression) -> Result<Vec<String>> {
     let Expression::FunctionCall(call) = expression else {
-        bail!("not a function call");
+        bail!("'{}' is not a function call", expression.to_string().trim());
     };
 
     if call.prefix().to_string().trim() == "require" && call.suffixes().count() == 1 {
@@ -53,10 +53,13 @@ pub fn match_require(expression: &Expression) -> Result<Vec<String>> {
             }
         }
     } else {
-        bail!("unknown require expression");
+        bail!("unknown require expression '{}'", call.to_string().trim());
     }
 
-    bail!("not a require function call")
+    bail!(
+        "'{}' is not a require function call",
+        call.to_string().trim()
+    )
 }
 
 #[cfg(test)]
@@ -72,10 +75,6 @@ mod tests {
             unreachable!()
         };
         Expression::FunctionCall(expression.clone())
-    }
-
-    fn components(components: Vec<&str>) -> Result<Vec<String>> {
-        Ok(components.iter().map(|x| x.to_string()).collect())
     }
 
     fn expression_into_components(code: &str, components: Vec<&str>) -> bool {

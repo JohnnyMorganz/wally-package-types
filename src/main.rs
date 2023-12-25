@@ -1,4 +1,4 @@
-use log::{error, Level};
+use log::{error, Level, LevelFilter};
 use std::io::Write;
 
 use clap::Parser;
@@ -8,6 +8,7 @@ use wally_package_types::Command;
 
 fn main() {
     env_logger::Builder::from_env("LOG")
+        .filter_level(LevelFilter::Info)
         .format(move |buf, record| {
             let tag = match record.level() {
                 Level::Error => style("error").red(),

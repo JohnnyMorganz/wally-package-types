@@ -59,10 +59,14 @@ fn file_path_from_components(
 ) -> Result<PathBuf> {
     let mut iter = path_components.iter();
     let first_in_chain = iter.next().context("No path components")?;
-    assert!(first_in_chain == "script" || first_in_chain == "game");
+
+    if !(first_in_chain == "script" || first_in_chain == "game") {
+        bail!("require expression does not start with 'script' or 'game', cannot determine starting point");
+    }
 
     let mut node_path = if first_in_chain == "script" {
-        find_node(root, path.canonicalize()?).context("Linker node not found in sourcemap")?
+        find_node(root, path.canonicalize()?)
+            .with_context(|| format!("Linker node '{}' not found in sourcemap", path.display()))?
     } else {
         vec![root]
     };
@@ -132,7 +136,10 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<MutateResult> {
             }
         };
 
-        info!("Path converted to: '{}'", path_components.join("/"));
+        info!(
+            "Require expression converted to path: '{}'",
+            path_components.join("/")
+        );
 
         let file_path = file_path_from_components(path, root, path_components)
             .context("Could not convert require expression to file path")?;
@@ -143,8 +150,13 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<MutateResult> {
             .context("Failed to create new link contents")?;
 
         match new_link_contents {
-            MutateLinkResult::Changed(new_ast) => std::fs::write(path, full_moon::print(&new_ast))?,
-            MutateLinkResult::Unchanged => (),
+            MutateLinkResult::Changed(new_ast) => {
+                info!("Exported types found, writing new linker file");
+                std::fs::write(path, full_moon::print(&new_ast))?
+            }
+            MutateLinkResult::Unchanged => {
+                info!("No exported types, leaving unchanged");
+            }
         };
     } else {
         warn!("Malformed link file, no return statement found, skipping. Run `wally install` to regenerate link files");
