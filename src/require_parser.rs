@@ -58,3 +58,47 @@ pub fn match_require(expression: &Expression) -> Option<Vec<String>> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use full_moon::ast::Stmt;
+
+    use super::*;
+
+    fn require_expression(code: &str) -> Expression {
+        let parsed_ast = full_moon::parse(code).unwrap();
+        let stmt = parsed_ast.nodes().stmts().next().unwrap();
+        let Stmt::FunctionCall(expression) = stmt else {
+            unreachable!()
+        };
+        Expression::FunctionCall(expression.clone())
+    }
+
+    fn components(components: Vec<&str>) -> Option<Vec<String>> {
+        Some(components.iter().map(|x| x.to_string()).collect())
+    }
+
+    #[test]
+    fn simple_require() {
+        assert_eq!(
+            match_require(&require_expression("require(script.Parent.Example)")),
+            components(vec!["script", "Parent", "Example"])
+        )
+    }
+
+    #[test]
+    fn require_with_brackets() {
+        assert_eq!(
+            match_require(&require_expression("require(script.Parent['Example'])")),
+            components(vec!["script", "Parent", "Example"])
+        )
+    }
+
+    #[test]
+    fn unhandled_require() {
+        assert_eq!(
+            match_require(&require_expression("require('string')")),
+            None
+        )
+    }
+}
