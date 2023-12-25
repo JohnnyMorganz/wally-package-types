@@ -13,39 +13,7 @@ use full_moon::{
     tokenizer::{Token, TokenReference, TokenType},
 };
 
-use serde::Deserialize;
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct SourcemapNode {
-    name: String,
-    class_name: String,
-    #[serde(default)]
-    file_paths: Vec<PathBuf>,
-    #[serde(default)]
-    children: Vec<SourcemapNode>,
-}
-
-impl SourcemapNode {
-    fn find_child(&self, name: String) -> Option<&SourcemapNode> {
-        self.children.iter().find(|child| child.name == name)
-    }
-}
-
-fn mutate_sourcemap(node: &mut SourcemapNode) {
-    node.file_paths = node
-        .file_paths
-        .iter()
-        .map(|path| {
-            path.canonicalize()
-                .unwrap_or_else(|_| panic!("failed to canonicalize {}", path.display()))
-        })
-        .collect();
-
-    for child in &mut node.children {
-        mutate_sourcemap(child);
-    }
-}
+use crate::sourcemap::*;
 
 fn expression_to_components(expression: &Expression) -> Vec<String> {
     let mut components = Vec::new();

@@ -2,9 +2,7 @@ use anyhow::Result;
 
 use clap::Parser;
 
-mod command;
-
-use command::Command;
+use wally_package_types::Command;
 
 fn main() -> Result<()> {
     Command::parse().run()
