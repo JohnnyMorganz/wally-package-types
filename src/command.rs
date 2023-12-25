@@ -8,7 +8,7 @@ use full_moon::{
         span::ContainedSpan,
         types::{ExportedTypeDeclaration, GenericParameterInfo, IndexedTypeInfo, TypeInfo},
         Call, Expression, FunctionArgs, Index, LastStmt, LocalAssignment, Return, Stmt, Suffix,
-        Value, Var,
+        Var,
     },
     tokenizer::{Token, TokenReference, TokenType},
 };
@@ -51,36 +51,30 @@ fn expression_to_components(expression: &Expression) -> Vec<String> {
     let mut components = Vec::new();
 
     match expression {
-        Expression::Value { value, .. } => match &**value {
-            Value::Var(Var::Expression(var_expression)) => {
-                components.push(var_expression.prefix().to_string().trim().to_string());
+        Expression::Var(Var::Expression(var_expression)) => {
+            components.push(var_expression.prefix().to_string().trim().to_string());
 
-                for suffix in var_expression.suffixes() {
-                    match suffix {
-                        Suffix::Index(index) => match index {
-                            Index::Dot { name, .. } => {
-                                components.push(name.to_string().trim().to_string());
-                            }
-                            Index::Brackets { expression, .. } => match expression {
-                                Expression::Value { value, .. } => match &**value {
-                                    Value::String(name) => match name.token_type() {
-                                        TokenType::StringLiteral { literal, .. } => {
-                                            components.push(literal.trim().to_string());
-                                        }
-                                        _ => panic!("non-string brackets index"),
-                                    },
-                                    _ => panic!("non-string brackets index"),
-                                },
+            for suffix in var_expression.suffixes() {
+                match suffix {
+                    Suffix::Index(index) => match index {
+                        Index::Dot { name, .. } => {
+                            components.push(name.to_string().trim().to_string());
+                        }
+                        Index::Brackets { expression, .. } => match expression {
+                            Expression::String(name) => match name.token_type() {
+                                TokenType::StringLiteral { literal, .. } => {
+                                    components.push(literal.trim().to_string());
+                                }
                                 _ => panic!("non-string brackets index"),
                             },
-                            _ => panic!("unknown index"),
+                            _ => panic!("non-string brackets index"),
                         },
-                        _ => panic!("incorrect suffix"),
-                    }
+                        _ => panic!("unknown index"),
+                    },
+                    _ => panic!("incorrect suffix"),
                 }
             }
-            _ => panic!("unknown require expression"),
-        },
+        }
         _ => panic!("unknown require expression"),
     };
 
@@ -89,26 +83,21 @@ fn expression_to_components(expression: &Expression) -> Vec<String> {
 
 fn match_require(expression: &Expression) -> Option<Vec<String>> {
     match expression {
-        Expression::Value { value, .. } => match &**value {
-            Value::FunctionCall(call) => {
-                if call.prefix().to_string().trim() == "require" && call.suffixes().count() == 1 {
-                    if let Suffix::Call(Call::AnonymousCall(FunctionArgs::Parentheses {
-                        arguments,
-                        ..
-                    })) = call.suffixes().next().unwrap()
-                    {
-                        if arguments.len() == 1 {
-                            return Some(expression_to_components(
-                                arguments.iter().next().unwrap(),
-                            ));
-                        }
+        Expression::FunctionCall(call) => {
+            if call.prefix().to_string().trim() == "require" && call.suffixes().count() == 1 {
+                if let Suffix::Call(Call::AnonymousCall(FunctionArgs::Parentheses {
+                    arguments,
+                    ..
+                })) = call.suffixes().next().unwrap()
+                {
+                    if arguments.len() == 1 {
+                        return Some(expression_to_components(arguments.iter().next().unwrap()));
                     }
-                } else {
-                    panic!("unknown require expression");
                 }
+            } else {
+                panic!("unknown require expression");
             }
-            _ => panic!("unknown require expression"),
-        },
+        }
         _ => panic!("unknown require expression"),
     }
 
@@ -297,18 +286,15 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<()> {
             .with_last_stmt(Some((
                 LastStmt::Return(
                     Return::new().with_returns(
-                        std::iter::once(Pair::End(Expression::Value {
-                            value: Box::new(Value::Symbol(TokenReference::new(
-                                vec![],
-                                Token::new(TokenType::Identifier {
-                                    identifier: "REQUIRED_MODULE".into(),
-                                }),
-                                vec![Token::new(TokenType::Whitespace {
-                                    characters: "\n".into(),
-                                })],
-                            ))),
-                            type_assertion: None,
-                        }))
+                        std::iter::once(Pair::End(Expression::Symbol(TokenReference::new(
+                            vec![],
+                            Token::new(TokenType::Identifier {
+                                identifier: "REQUIRED_MODULE".into(),
+                            }),
+                            vec![Token::new(TokenType::Whitespace {
+                                characters: "\n".into(),
+                            })],
+                        ))))
                         .collect(),
                     ),
                 ),
