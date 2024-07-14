@@ -122,7 +122,14 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<MutateResult> {
     info!("Found link file '{}'", path.display());
 
     // The entry should be a thunk
-    let parsed_code = full_moon::parse(&std::fs::read_to_string(path)?)?;
+    let parsed_code = match full_moon::parse(&std::fs::read_to_string(path)?) {
+        Ok(parsed_code) => parsed_code,
+        Err(errors) => bail!(errors
+            .iter()
+            .map(|err| err.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")),
+    };
 
     if let Some(LastStmt::Return(r#return)) = parsed_code.nodes().last_stmt() {
         let returned_expression = r#return.returns().iter().next().unwrap();

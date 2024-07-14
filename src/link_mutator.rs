@@ -1,9 +1,9 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use full_moon::{
     ast::{
+        luau::{ExportedTypeDeclaration, GenericParameterInfo, IndexedTypeInfo, TypeInfo},
         punctuated::{Pair, Punctuated},
         span::ContainedSpan,
-        types::{ExportedTypeDeclaration, GenericParameterInfo, IndexedTypeInfo, TypeInfo},
         Ast, Expression, LastStmt, LocalAssignment, Return, Stmt,
     },
     tokenizer::{Token, TokenReference, TokenType},
@@ -11,7 +11,14 @@ use full_moon::{
 
 /// Finds all exported type declarations from a give source file
 pub fn type_declarations_from_source(code: &str) -> Result<Vec<ExportedTypeDeclaration>> {
-    let parsed_module = full_moon::parse(code)?;
+    let parsed_module = match full_moon::parse(code) {
+        Ok(parsed_code) => parsed_code,
+        Err(errors) => bail!(errors
+            .iter()
+            .map(|err| err.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")),
+    };
 
     Ok(parsed_module
         .nodes()
@@ -37,10 +44,12 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
                 .map(|pair| {
                     pair.clone().map(|decl| match decl.parameter() {
                         GenericParameterInfo::Name(token) => TypeInfo::Basic(token.clone()),
-                        GenericParameterInfo::Variadic { name, ellipse } => TypeInfo::GenericPack {
-                            name: name.clone(),
-                            ellipse: ellipse.clone(),
-                        },
+                        GenericParameterInfo::Variadic { name, ellipsis } => {
+                            TypeInfo::GenericPack {
+                                name: name.clone(),
+                                ellipsis: ellipsis.clone(),
+                            }
+                        }
                         _ => unreachable!(),
                     })
                 })
