@@ -159,7 +159,7 @@ fn mutate_thunk(path: &Path, root: &SourcemapNode) -> Result<MutateResult> {
         match new_link_contents {
             MutateLinkResult::Changed(new_ast) => {
                 info!("Exported types found, writing new linker file");
-                std::fs::write(path, full_moon::print(&new_ast))?
+                std::fs::write(path, new_ast.to_string())?
             }
             MutateLinkResult::Unchanged => {
                 info!("No exported types, leaving unchanged");
