@@ -22,7 +22,7 @@ pub struct Command {
 
     /// Path to packages
     #[clap(value_parser)]
-    pub packages_folder: PathBuf,
+    pub packages_folders: Vec<PathBuf>,
 }
 
 fn find_node(root: &SourcemapNode, path: PathBuf) -> Option<Vec<&SourcemapNode>> {
@@ -197,6 +197,30 @@ fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<bool> {
     Ok(success)
 }
 
+fn handle_packages_folder(path: &Path, sourcemap: &SourcemapNode) -> Result<bool> {
+    let mut success = true;
+
+    for entry in std::fs::read_dir(path)
+        .context("Failed to read packages folder")?
+        .flatten()
+    {
+        if entry.file_name() == "_Index" {
+            match handle_index_directory(&entry.path(), sourcemap) {
+                Ok(index_success) => success &= index_success,
+                Err(err) => {
+                    error!("{:#}", err);
+                    success = false;
+                }
+            }
+            continue;
+        }
+
+        success &= handled_mutate_thunk(&entry.path(), sourcemap)
+    }
+
+    Ok(success)
+}
+
 impl Command {
     pub fn run(&self) -> Result<()> {
         let sourcemap_contents =
@@ -208,29 +232,27 @@ impl Command {
         // And that they contain pointers to their parent
         mutate_sourcemap(&mut sourcemap)?;
 
-        let mut success = true;
-        for entry in std::fs::read_dir(&self.packages_folder)
-            .context("Failed to read packages folder")?
-            .flatten()
-        {
-            if entry.file_name() == "_Index" {
-                match handle_index_directory(&entry.path(), &sourcemap) {
-                    Ok(index_success) => success &= index_success,
-                    Err(err) => {
-                        error!("{:#}", err);
-                        success = false;
-                    }
-                }
-                continue;
+        let mut failures = 0;
+        let total = self.packages_folders.len();
+
+        for path in &self.packages_folders {
+            if handle_packages_folder(path, &sourcemap)? {
+                info!(
+                    "Mutation completed successfully for path '{}'",
+                    path.display()
+                );
+            } else {
+                failures += 1;
+                error!("Mutation failed for path '{}'", path.display());
             }
-
-            success &= handled_mutate_thunk(&entry.path(), &sourcemap)
         }
 
-        if success {
-            Ok(())
+        if failures == 0 {
+            info!("Mutation completed successfully for all paths");
         } else {
-            bail!("Mutation did not complete successfully");
+            bail!("Mutation failed for {} out of {} paths", failures, total);
         }
+
+        Ok(())
     }
 }
