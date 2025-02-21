@@ -12,6 +12,8 @@ use full_moon::{
     tokenizer::{Token, TokenReference, TokenType},
 };
 
+const BUILTIN_TYPE_NAMES: [&str; 6] = ["boolean", "buffer", "number", "string", "thread", "unknown"];
+
 /// Finds all exported type declarations from a give source file
 pub fn type_declarations_from_source(code: &str) -> Result<Vec<ExportedTypeDeclaration>> {
     let parsed_module = match full_moon::parse(code) {
@@ -36,7 +38,16 @@ pub fn type_declarations_from_source(code: &str) -> Result<Vec<ExportedTypeDecla
 fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> bool {
     // TODO: we could be more clever here, but for now we keep it simple
     match type_info {
-        TypeInfo::Basic(name) => resolved_types.contains(&name.token().to_string()),
+        TypeInfo::Basic(name) => {
+            let name_string: &String = &name.token().to_string();
+            if resolved_types.contains(name_string) {
+                true
+            } else if BUILTIN_TYPE_NAMES.contains(&name_string.as_str()) {
+                true
+            } else {
+                false
+            }
+        },
         TypeInfo::Boolean(_) => true,
         _ => false,
     }
@@ -258,6 +269,24 @@ mod tests {
         assert_eq!(
             reexported_type_declarations[0].0.to_string(),
             "export type Value<T, S > = REQUIRED_MODULE.Value<T, S >"
+        );
+    }
+
+    #[test]
+    fn re_exports_generic_defaults_if_they_are_builtin_types() {
+        let code = r"
+            export type Value<T, S = unknown> = Types.Value<T, S>
+        ";
+
+        let type_declarations = type_declarations_from_source(code).unwrap();
+        assert_eq!(type_declarations.len(), 1);
+
+        let reexported_type_declarations = re_export_type_declarations(type_declarations);
+        assert_eq!(reexported_type_declarations.len(), 1);
+
+        assert_eq!(
+            reexported_type_declarations[0].0.to_string(),
+            "export type Value<T, S = unknown> = REQUIRED_MODULE.Value<T, S >"
         );
     }
 }
