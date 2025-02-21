@@ -42,10 +42,8 @@ fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> 
             let name_string: &String = &name.token().to_string();
             if resolved_types.contains(name_string) {
                 true
-            } else if BUILTIN_TYPE_NAMES.contains(&name_string.as_str()) {
-                true
             } else {
-                false
+                BUILTIN_TYPE_NAMES.contains(&name_string.as_str())
             }
         },
         TypeInfo::Boolean(_) => true,
