@@ -39,7 +39,7 @@ fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> 
     // TODO: we could be more clever here, but for now we keep it simple
     match type_info {
         TypeInfo::Basic(name) => {
-            let name_string: &String = &name.token().to_string();
+            let name_string = &name.token().to_string();
             if resolved_types.contains(name_string) {
                 true
             } else {
