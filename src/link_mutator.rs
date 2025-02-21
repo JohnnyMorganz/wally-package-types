@@ -12,8 +12,6 @@ use full_moon::{
     tokenizer::{Token, TokenReference, TokenType},
 };
 
-const BUILTIN_TYPE_NAMES: [&str; 6] = ["boolean", "buffer", "number", "string", "thread", "unknown"];
-
 /// Finds all exported type declarations from a give source file
 pub fn type_declarations_from_source(code: &str) -> Result<Vec<ExportedTypeDeclaration>> {
     let parsed_module = match full_moon::parse(code) {
@@ -43,9 +41,12 @@ fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> 
             if resolved_types.contains(name_string) {
                 true
             } else {
-                BUILTIN_TYPE_NAMES.contains(&name_string.as_str())
+                matches!(
+                    name_string.as_str(),
+                    "boolean" | "buffer" | "number" | "string" | "thread" | "unknown" | "any"
+                )
             }
-        },
+        }
         TypeInfo::Boolean(_) => true,
         _ => false,
     }
