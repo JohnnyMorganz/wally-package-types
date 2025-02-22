@@ -36,17 +36,7 @@ pub fn type_declarations_from_source(code: &str) -> Result<Vec<ExportedTypeDecla
 fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> bool {
     // TODO: we could be more clever here, but for now we keep it simple
     match type_info {
-        TypeInfo::Basic(name) => {
-            let name_string = &name.token().to_string();
-            if resolved_types.contains(name_string) {
-                true
-            } else {
-                matches!(
-                    name_string.as_str(),
-                    "boolean" | "buffer" | "number" | "string" | "thread" | "unknown" | "any"
-                )
-            }
-        }
+        TypeInfo::Basic(name) => resolved_types.contains(&name.token().to_string()),
         TypeInfo::Boolean(_) => true,
         _ => false,
     }
@@ -97,7 +87,7 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
     };
 
     // Modify the original type declaration to remove the default generics, if they are not resolvable
-    let resolved_types = stmt
+    let mut resolved_types = stmt
         .type_declaration()
         .generics()
         .map_or(vec![], |generics| {
@@ -111,6 +101,13 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
                 })
                 .collect()
         });
+    resolved_types.extend(
+        [
+            "any", "boolean", "buffer", "never", "number", "string", "thread", "unknown",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
 
     let original_type_declaration = match stmt.type_declaration().generics() {
         Some(generics) => stmt.type_declaration().clone().with_generics(Some(
