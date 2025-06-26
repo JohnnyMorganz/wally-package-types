@@ -87,7 +87,7 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
     };
 
     // Modify the original type declaration to remove the default generics, if they are not resolvable
-    let resolved_types = stmt
+    let mut resolved_types = stmt
         .type_declaration()
         .generics()
         .map_or(vec![], |generics| {
@@ -101,6 +101,13 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
                 })
                 .collect()
         });
+    resolved_types.extend(
+        [
+            "any", "boolean", "buffer", "never", "number", "string", "thread", "unknown",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
 
     let original_type_declaration = match stmt.type_declaration().generics() {
         Some(generics) => stmt.type_declaration().clone().with_generics(Some(
@@ -258,6 +265,24 @@ mod tests {
         assert_eq!(
             reexported_type_declarations[0].0.to_string(),
             "export type Value<T, S > = REQUIRED_MODULE.Value<T, S >"
+        );
+    }
+
+    #[test]
+    fn re_exports_generic_defaults_if_they_are_builtin_types() {
+        let code = r"
+            export type Value<T, S = unknown> = Types.Value<T, S>
+        ";
+
+        let type_declarations = type_declarations_from_source(code).unwrap();
+        assert_eq!(type_declarations.len(), 1);
+
+        let reexported_type_declarations = re_export_type_declarations(type_declarations);
+        assert_eq!(reexported_type_declarations.len(), 1);
+
+        assert_eq!(
+            reexported_type_declarations[0].0.to_string(),
+            "export type Value<T, S = unknown> = REQUIRED_MODULE.Value<T, S >"
         );
     }
 }
