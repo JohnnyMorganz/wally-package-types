@@ -30,7 +30,7 @@ jobs:
           - os: windows-latest
             artifact-name: wally-package-types-win64
             cargo-target: x86_64-pc-windows-msvc
-          - os: ubuntu-20.04
+          - os: ubuntu-22.04
             artifact-name: wally-package-types-linux
             cargo-target: x86_64-unknown-linux-gnu
           - os: macos-latest
