@@ -58,7 +58,10 @@ fn strip_unknown_default_generics(
         .collect::<Punctuated<_>>()
 }
 
-pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTypeDeclaration {
+pub fn create_new_type_declaration(
+    stmt: &ExportedTypeDeclaration,
+    known_type_names: Vec<String>,
+) -> ExportedTypeDeclaration {
     let type_info = match stmt.type_declaration().generics() {
         Some(generics) => IndexedTypeInfo::Generic {
             base: stmt.type_declaration().type_name().clone(),
@@ -101,12 +104,14 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
                 })
                 .collect()
         });
+
     resolved_types.extend(
         [
             "any", "boolean", "buffer", "never", "number", "string", "thread", "unknown",
         ]
         .into_iter()
-        .map(String::from),
+        .map(String::from)
+        .chain(known_type_names),
     );
 
     let original_type_declaration = match stmt.type_declaration().generics() {
@@ -138,11 +143,19 @@ pub fn create_new_type_declaration(stmt: &ExportedTypeDeclaration) -> ExportedTy
 fn re_export_type_declarations(
     stmts: Vec<ExportedTypeDeclaration>,
 ) -> Vec<(Stmt, Option<TokenReference>)> {
+    let known_type_names: Vec<String> = stmts
+        .iter()
+        .map(|stmt| stmt.type_declaration().type_name().token().to_string())
+        .collect();
+
     stmts
         .iter()
         .map(|stmt| {
             (
-                Stmt::ExportedTypeDeclaration(create_new_type_declaration(stmt)),
+                Stmt::ExportedTypeDeclaration(create_new_type_declaration(
+                    stmt,
+                    known_type_names.clone(),
+                )),
                 Some(TokenReference::new(
                     vec![],
                     Token::new(TokenType::Whitespace {
@@ -283,6 +296,25 @@ mod tests {
         assert_eq!(
             reexported_type_declarations[0].0.to_string(),
             "export type Value<T, S = unknown> = REQUIRED_MODULE.Value<T, S >"
+        );
+    }
+
+    #[test]
+    fn re_exports_generic_defaults_if_they_are_defined_earlier() {
+        let code = r"
+            export type Action = string
+            export type Value<T, S = Action> = Types.Value<T, S>
+        ";
+
+        let type_declarations = type_declarations_from_source(code).unwrap();
+        assert_eq!(type_declarations.len(), 2);
+
+        let reexported_type_declarations = re_export_type_declarations(type_declarations);
+        assert_eq!(reexported_type_declarations.len(), 2);
+
+        assert_eq!(
+            reexported_type_declarations[1].0.to_string(),
+            "export type Value<T, S = Action> = REQUIRED_MODULE.Value<T, S >"
         );
     }
 }
