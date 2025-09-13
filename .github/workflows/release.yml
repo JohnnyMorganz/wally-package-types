@@ -67,11 +67,11 @@ jobs:
           mkdir -p staging
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "output/release/wally-package-types.exe" staging/
+            cp "output/${{ matrix.cargo-target }}/release/wally-package-types.exe" staging/
             cd staging
             7z a ../release.zip *
           else
-            cp "output/release/wally-package-types" staging/
+            cp "output/${{ matrix.cargo-target }}/release/wally-package-types" staging/
             cd staging
             zip ../release.zip *
           fi
