@@ -31,8 +31,11 @@ jobs:
             artifact-name: wally-package-types-win64
             cargo-target: x86_64-pc-windows-msvc
           - os: ubuntu-22.04
-            artifact-name: wally-package-types-linux
+            artifact-name: wally-package-types-linux-x86_64
             cargo-target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04
+            artifact-name: wally-package-types-linux-aarch64
+            cargo-target: aarch64-unknown-linux-gnu
           - os: macos-latest
             artifact-name: wally-package-types-macos
             cargo-target: x86_64-apple-darwin
