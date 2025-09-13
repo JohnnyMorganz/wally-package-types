@@ -212,6 +212,7 @@ fn create_return_require_variable() -> (LastStmt, Option<TokenReference>) {
     )
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum MutateLinkResult {
     Changed(Ast),
     Unchanged,
