@@ -187,6 +187,13 @@ fn handled_mutate_thunk(path: &Path, root: &SourcemapNode) -> bool {
 fn handle_index_directory(path: &Path, root: &SourcemapNode) -> Result<bool> {
     let mut success = true;
     for package_entry in std::fs::read_dir(path)?.flatten() {
+        if !package_entry
+            .file_type()
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
         for thunk in std::fs::read_dir(package_entry.path())?.flatten() {
             if thunk.file_type().unwrap().is_file() {
                 success &= handled_mutate_thunk(&thunk.path(), root);
@@ -219,6 +226,264 @@ fn handle_packages_folder(path: &Path, sourcemap: &SourcemapNode) -> Result<bool
     }
 
     Ok(success)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Creates the full directory structure for an integration test.
+    /// Returns the temp directory path.
+    fn setup_transitive_dep_test() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wally-package-types-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        // Create directory structure mirroring what wally install creates:
+        //
+        // Packages/
+        //   DirectDep.lua          <- root thunk for direct dep A
+        //   _Index/
+        //     scope_a@1.0.0/       <- package A's versioned directory
+        //       TransitiveDep.lua  <- thunk for A's sub-dep B (this is what the bug is about)
+        //       a_name/
+        //         init.lua         <- A's actual code
+        //     scope_b@1.0.0/       <- package B's versioned directory
+        //       b_name/
+        //         init.lua         <- B's actual code with exported types
+
+        let index_dir = dir.join("Packages/_Index");
+        let pkg_a_dir = index_dir.join("scope_a@1.0.0");
+        let pkg_a_content_dir = pkg_a_dir.join("a_name");
+        let pkg_b_content_dir = index_dir.join("scope_b@1.0.0/b_name");
+
+        fs::create_dir_all(&pkg_a_content_dir).unwrap();
+        fs::create_dir_all(&pkg_b_content_dir).unwrap();
+
+        // Root link file for direct dep A
+        fs::write(
+            dir.join("Packages/DirectDep.lua"),
+            "return require(script.Parent._Index[\"scope_a@1.0.0\"][\"a_name\"])\n",
+        )
+        .unwrap();
+
+        // Transitive dep thunk: A's link to B (inside _Index/scope_a@1.0.0/)
+        // This uses link_sibling_same_index pattern: script.Parent.Parent[...][...]
+        fs::write(
+            pkg_a_dir.join("TransitiveDep.lua"),
+            "return require(script.Parent.Parent[\"scope_b@1.0.0\"][\"b_name\"])\n",
+        )
+        .unwrap();
+
+        // A's actual code - exports a type that references B
+        fs::write(
+            pkg_a_content_dir.join("init.lua"),
+            "export type Foo = string\nreturn {}\n",
+        )
+        .unwrap();
+
+        // B's actual code - exports types that should propagate through the chain
+        fs::write(
+            pkg_b_content_dir.join("init.lua"),
+            "export type Bar = number\nreturn {}\n",
+        )
+        .unwrap();
+
+        dir
+    }
+
+    fn create_sourcemap(dir: &std::path::Path) -> std::path::PathBuf {
+        let packages_dir = dir.join("Packages");
+        let direct_dep_path = packages_dir
+            .join("DirectDep.lua")
+            .canonicalize()
+            .unwrap();
+        let transitive_thunk_path = packages_dir
+            .join("_Index/scope_a@1.0.0/TransitiveDep.lua")
+            .canonicalize()
+            .unwrap();
+        let pkg_a_path = packages_dir
+            .join("_Index/scope_a@1.0.0/a_name/init.lua")
+            .canonicalize()
+            .unwrap();
+        let pkg_b_path = packages_dir
+            .join("_Index/scope_b@1.0.0/b_name/init.lua")
+            .canonicalize()
+            .unwrap();
+
+        let sourcemap = serde_json::json!({
+            "name": "Game",
+            "className": "DataModel",
+            "children": [{
+                "name": "Packages",
+                "className": "Folder",
+                "filePaths": [],
+                "children": [
+                    {
+                        "name": "DirectDep",
+                        "className": "ModuleScript",
+                        "filePaths": [direct_dep_path.to_str().unwrap()]
+                    },
+                    {
+                        "name": "_Index",
+                        "className": "Folder",
+                        "filePaths": [],
+                        "children": [
+                            {
+                                "name": "scope_a@1.0.0",
+                                "className": "Folder",
+                                "filePaths": [],
+                                "children": [
+                                    {
+                                        "name": "TransitiveDep",
+                                        "className": "ModuleScript",
+                                        "filePaths": [transitive_thunk_path.to_str().unwrap()]
+                                    },
+                                    {
+                                        "name": "a_name",
+                                        "className": "ModuleScript",
+                                        "filePaths": [pkg_a_path.to_str().unwrap()]
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "scope_b@1.0.0",
+                                "className": "Folder",
+                                "filePaths": [],
+                                "children": [
+                                    {
+                                        "name": "b_name",
+                                        "className": "ModuleScript",
+                                        "filePaths": [pkg_b_path.to_str().unwrap()]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }]
+        });
+
+        let sourcemap_path = dir.join("sourcemap.json");
+        fs::write(&sourcemap_path, sourcemap.to_string()).unwrap();
+        sourcemap_path
+    }
+
+    #[test]
+    fn transitive_dep_thunk_is_mutated_with_types() {
+        let dir = setup_transitive_dep_test();
+        let sourcemap_path = create_sourcemap(&dir);
+
+        let cmd = Command {
+            sourcemap: sourcemap_path,
+            packages_folders: vec![dir.join("Packages")],
+        };
+
+        let result = cmd.run();
+        assert!(result.is_ok(), "Command failed: {:?}", result);
+
+        let transitive_thunk = fs::read_to_string(
+            dir.join("Packages/_Index/scope_a@1.0.0/TransitiveDep.lua"),
+        )
+        .unwrap();
+
+        // The transitive dep thunk should have been mutated to re-export types from B
+        assert!(
+            transitive_thunk.contains("export type"),
+            "Transitive dep thunk was not mutated with type exports:\n{}",
+            transitive_thunk
+        );
+        assert!(
+            transitive_thunk.contains("Bar"),
+            "Transitive dep thunk doesn't re-export 'Bar' type from package B:\n{}",
+            transitive_thunk
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn direct_dep_thunk_is_mutated_with_types() {
+        let dir = setup_transitive_dep_test();
+        let sourcemap_path = create_sourcemap(&dir);
+
+        let cmd = Command {
+            sourcemap: sourcemap_path,
+            packages_folders: vec![dir.join("Packages")],
+        };
+
+        let result = cmd.run();
+        assert!(result.is_ok(), "Command failed: {:?}", result);
+
+        let direct_thunk =
+            fs::read_to_string(dir.join("Packages/DirectDep.lua")).unwrap();
+
+        // The direct dep thunk should have been mutated to re-export types from A
+        assert!(
+            direct_thunk.contains("export type"),
+            "Direct dep thunk was not mutated with type exports:\n{}",
+            direct_thunk
+        );
+        assert!(
+            direct_thunk.contains("Foo"),
+            "Direct dep thunk doesn't re-export 'Foo' type from package A:\n{}",
+            direct_thunk
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Regression test: when _Index/ contains a stray file (not a package directory),
+    /// handle_index_directory must not bail out — it should skip the file and continue
+    /// processing all package directories, including their transitive dep thunks.
+    #[test]
+    fn orphan_file_in_index_does_not_prevent_transitive_dep_mutation() {
+        let dir = setup_transitive_dep_test();
+
+        // Place a stray .lua file directly inside _Index/ — this can happen in the wild
+        // when Wally leaves orphaned files after package updates.
+        // Because filesystem readdir ordering is not guaranteed, we name it "!orphan.lua"
+        // (ASCII '!' sorts before letters) to ensure it appears before the package dirs
+        // in any typical sorted traversal, maximising the chance it triggers the bug.
+        fs::write(
+            dir.join("Packages/_Index/!orphan.lua"),
+            "-- stray file\n",
+        )
+        .unwrap();
+
+        let sourcemap_path = create_sourcemap(&dir);
+
+        let cmd = Command {
+            sourcemap: sourcemap_path,
+            packages_folders: vec![dir.join("Packages")],
+        };
+
+        let result = cmd.run();
+        assert!(result.is_ok(), "Command failed: {:?}", result);
+
+        let transitive_thunk = fs::read_to_string(
+            dir.join("Packages/_Index/scope_a@1.0.0/TransitiveDep.lua"),
+        )
+        .unwrap();
+
+        assert!(
+            transitive_thunk.contains("export type"),
+            "Transitive dep thunk was not mutated despite orphan file in _Index/:\n{}",
+            transitive_thunk
+        );
+        assert!(
+            transitive_thunk.contains("Bar"),
+            "Transitive dep thunk doesn't re-export 'Bar' type:\n{}",
+            transitive_thunk
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 impl Command {
