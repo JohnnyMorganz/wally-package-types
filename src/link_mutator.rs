@@ -46,7 +46,8 @@ fn strip_unknown_default_generics(
     generics: &GenericDeclaration,
     resolved_types: &[String],
 ) -> Punctuated<GenericDeclarationParameter> {
-    generics
+    // First pass: strip defaults that reference unknown types
+    let stripped: Vec<_> = generics
         .generics()
         .pairs()
         .map(|pair| {
@@ -55,7 +56,29 @@ fn strip_unknown_default_generics(
                 _ => decl.with_default(None),
             })
         })
-        .collect::<Punctuated<_>>()
+        .collect();
+
+    // In Luau, once a parameter has a default, all subsequent parameters must also have defaults.
+    // Find the last parameter without a default, and strip defaults from all parameters before it
+    // to avoid generating invalid "State = any, Dispatchers" style declarations.
+    let last_no_default_idx = stripped
+        .iter()
+        .rposition(|pair| pair.value().default_type().is_none());
+
+    match last_no_default_idx {
+        None => stripped.into_iter().collect(),
+        Some(last_idx) => stripped
+            .into_iter()
+            .enumerate()
+            .map(|(i, pair)| {
+                if i < last_idx {
+                    pair.map(|decl| decl.with_default(None))
+                } else {
+                    pair
+                }
+            })
+            .collect(),
+    }
 }
 
 pub fn create_new_type_declaration(
@@ -316,6 +339,27 @@ mod tests {
         assert_eq!(
             reexported_type_declarations[1].0.to_string(),
             "export type Value<T, S = Action> = REQUIRED_MODULE.Value<T, S >"
+        );
+    }
+
+    #[test]
+    fn strips_earlier_defaults_when_later_param_has_unknown_default() {
+        // Luau requires that once a param has a default, all subsequent params must too.
+        // If a later param's default is stripped (unknown type), earlier defaults must also be stripped.
+        // This matches the Reflex `Producer<State = any, Dispatchers = ExternalType>` case from issue #27.
+        let code = r"
+            export type Producer<State = any, Dispatchers = ExternalType> = Types.Producer<State, Dispatchers>
+        ";
+
+        let type_declarations = type_declarations_from_source(code).unwrap();
+        assert_eq!(type_declarations.len(), 1);
+
+        let reexported_type_declarations = re_export_type_declarations(type_declarations);
+        assert_eq!(reexported_type_declarations.len(), 1);
+
+        assert_eq!(
+            reexported_type_declarations[0].0.to_string(),
+            "export type Producer<State , Dispatchers > = REQUIRED_MODULE.Producer<State , Dispatchers >"
         );
     }
 }
