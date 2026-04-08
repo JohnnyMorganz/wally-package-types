@@ -42,6 +42,13 @@ fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> 
     }
 }
 
+fn will_strip_default(decl: &GenericDeclarationParameter, resolved_types: &[String]) -> bool {
+    match decl.default_type() {
+        Some(type_info) => !should_keep_default_type(type_info, resolved_types),
+        None => true,
+    }
+}
+
 fn strip_unknown_default_generics(
     generics: &GenericDeclaration,
     resolved_types: &[String],
@@ -51,12 +58,9 @@ fn strip_unknown_default_generics(
     // Luau requires that once a parameter has a default, all subsequent ones must too.
     // Find the last parameter that will end up without a default (originally lacked one, or
     // has an unknown default that gets stripped). All parameters before it must also lose defaults.
-    let last_no_default_idx = pairs.iter().rposition(|pair| {
-        match pair.value().default_type() {
-            Some(type_info) => !should_keep_default_type(type_info, resolved_types),
-            None => true,
-        }
-    });
+    let last_no_default_idx = pairs
+        .iter()
+        .rposition(|pair| will_strip_default(pair.value(), resolved_types));
 
     pairs
         .into_iter()
@@ -66,12 +70,7 @@ fn strip_unknown_default_generics(
                 if last_no_default_idx.map_or(false, |last| i <= last) {
                     decl.with_default(None)
                 } else {
-                    match decl.default_type() {
-                        Some(type_info) if should_keep_default_type(type_info, resolved_types) => {
-                            decl
-                        }
-                        _ => decl.with_default(None),
-                    }
+                    decl
                 }
             })
         })
