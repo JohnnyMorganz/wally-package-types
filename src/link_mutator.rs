@@ -42,20 +42,39 @@ fn should_keep_default_type(type_info: &TypeInfo, resolved_types: &[String]) -> 
     }
 }
 
+fn will_strip_default(decl: &GenericDeclarationParameter, resolved_types: &[String]) -> bool {
+    match decl.default_type() {
+        Some(type_info) => !should_keep_default_type(type_info, resolved_types),
+        None => true,
+    }
+}
+
 fn strip_unknown_default_generics(
     generics: &GenericDeclaration,
     resolved_types: &[String],
 ) -> Punctuated<GenericDeclarationParameter> {
-    generics
-        .generics()
-        .pairs()
-        .map(|pair| {
-            pair.clone().map(|decl| match decl.default_type() {
-                Some(type_info) if should_keep_default_type(type_info, resolved_types) => decl,
-                _ => decl.with_default(None),
+    let pairs: Vec<_> = generics.generics().pairs().collect();
+
+    // Luau requires that once a parameter has a default, all subsequent ones must too.
+    // Find the last parameter that will end up without a default (originally lacked one, or
+    // has an unknown default that gets stripped). All parameters before it must also lose defaults.
+    let last_no_default_idx = pairs
+        .iter()
+        .rposition(|pair| will_strip_default(pair.value(), resolved_types));
+
+    pairs
+        .into_iter()
+        .enumerate()
+        .map(|(i, pair)| {
+            pair.clone().map(|decl| {
+                if last_no_default_idx.map_or(false, |last| i <= last) {
+                    decl.with_default(None)
+                } else {
+                    decl
+                }
             })
         })
-        .collect::<Punctuated<_>>()
+        .collect()
 }
 
 pub fn create_new_type_declaration(
@@ -316,6 +335,24 @@ mod tests {
         assert_eq!(
             reexported_type_declarations[1].0.to_string(),
             "export type Value<T, S = Action> = REQUIRED_MODULE.Value<T, S >"
+        );
+    }
+
+    #[test]
+    fn strips_earlier_defaults_when_later_param_has_unknown_default() {
+        let code = r"
+            export type Producer<State = any, Dispatchers = ExternalType> = Types.Producer<State, Dispatchers>
+        ";
+
+        let type_declarations = type_declarations_from_source(code).unwrap();
+        assert_eq!(type_declarations.len(), 1);
+
+        let reexported_type_declarations = re_export_type_declarations(type_declarations);
+        assert_eq!(reexported_type_declarations.len(), 1);
+
+        assert_eq!(
+            reexported_type_declarations[0].0.to_string(),
+            "export type Producer<State , Dispatchers > = REQUIRED_MODULE.Producer<State , Dispatchers >"
         );
     }
 }
