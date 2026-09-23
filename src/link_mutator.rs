@@ -76,7 +76,7 @@ fn strip_unknown_default_generics(
         .enumerate()
         .map(|(i, pair)| {
             pair.clone().map(|decl| {
-                if last_no_default_idx.map_or(false, |last| i <= last) {
+                if last_no_default_idx.is_some_and(|last| i <= last) {
                     decl.with_default(None)
                 } else {
                     decl
