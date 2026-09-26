@@ -14,8 +14,8 @@ use full_moon::{
 };
 
 pub enum ExportedTypeKind {
-    Declaration(ExportedTypeDeclaration),
-    Function(ExportedTypeFunction),
+    Declaration(Box<ExportedTypeDeclaration>),
+    Function(Box<ExportedTypeFunction>),
 }
 
 /// Finds all exported types from a give source file
@@ -34,9 +34,11 @@ pub fn type_exports_from_source(code: &str) -> Result<Vec<ExportedTypeKind>> {
         .stmts()
         .filter_map(|stmt| match stmt {
             Stmt::ExportedTypeDeclaration(stmt) => {
-                Some(ExportedTypeKind::Declaration(stmt.clone()))
+                Some(ExportedTypeKind::Declaration(Box::new(stmt.clone())))
             }
-            Stmt::ExportedTypeFunction(stmt) => Some(ExportedTypeKind::Function(stmt.clone())),
+            Stmt::ExportedTypeFunction(stmt) => {
+                Some(ExportedTypeKind::Function(Box::new(stmt.clone())))
+            }
             _ => None,
         })
         .collect())
